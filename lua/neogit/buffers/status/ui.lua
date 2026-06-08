@@ -226,7 +226,9 @@ local SectionItemFile = function(section, config)
         local diff = item.diff
         for _, hunk in ipairs(diff.hunks) do
           hunk.first = row
-          hunk.last = row + hunk.length
+          -- When a `log_pager` rewrites the hunk, the buffer span is the
+          -- rendered row count rather than the raw diff length.
+          hunk.last = row + (hunk.pager_length or hunk.length)
           row = hunk.last + 1
 
           -- Set fold state when called from ui:update()

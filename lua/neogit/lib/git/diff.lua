@@ -35,6 +35,9 @@ local sha256 = vim.fn.sha256
 ---@field diff_from number
 ---@field diff_to number
 ---@field length number
+---@field pager_length? number When a `log_pager` is active, total rendered
+---  rows for the hunk (the decorated output replaces the raw diff lines, so
+---  buffer extents must be derived from this length instead of `length`).
 ---@field hash string
 ---@field first number First line number in buffer
 ---@field last number Last line number in buffer
@@ -342,6 +345,12 @@ local function parse_diff(raw_diff, raw_stats)
   for i, hunk in ipairs(hunks) do
     hunk.file = file
     hunk.pager_line_mapping = pager_line_mappings[i]
+    if pager_contents[i] and pager_line_mappings[i] then
+      -- `hunk.length` counts the hunk header (1) plus its raw diff lines.
+      -- When a pager rewrites the content, mirror that with the rendered
+      -- row count (header + rendered content rows).
+      hunk.pager_length = 1 + #pager_contents[i]
+    end
   end
 
   return { ---@type Diff
