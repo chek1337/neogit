@@ -65,7 +65,7 @@ local function translate_cursor_location(self, item)
         -- See diff.build_pager_line_mapping: when a `log_pager` decorates the
         -- hunk, translate the rendered index back to a diff-line index.
         if hunk.pager_line_mapping then
-          offset = hunk.pager_line_mapping[offset] or false
+          offset = hunk.pager_line_mapping[offset]
           if not offset then
             return
           end

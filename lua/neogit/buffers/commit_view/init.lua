@@ -198,11 +198,12 @@ local function diff_visit_file(self, component, worktree)
   -- cursor does not correspond 1:1 to `hunk.lines`. Resolve the pager-rendered
   -- index back to a diff-line index before translating the location.
   if hunk.pager_line_mapping then
-    offset = hunk.pager_line_mapping[offset] or false
-  end
-  if not offset then
-    -- Cursor on a decoration line introduced by the pager
-    return
+    offset = hunk.pager_line_mapping[offset]
+    if not offset then
+      -- Pager mapping marks this row as non-translatable
+      -- (decoration line or out of range)
+      return
+    end
   end
   local location = jump.translate_hunk_location(hunk, offset)
   if not location then

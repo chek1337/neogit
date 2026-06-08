@@ -11,7 +11,7 @@ local sha256 = vim.fn.sha256
 ---@field parse fun(raw_diff: string[], raw_stats: string[]): Diff
 ---@field build fun(section: string, file: StatusItem)
 ---@field staged_stats fun(): DiffStagedStats
----@field build_pager_line_mapping fun(content: string[], hunk_lines: string[]): (integer|false)[]
+---@field build_pager_line_mapping fun(content: string[], hunk_lines: string[], prefix_length?: integer): (integer|false)[]
 ---
 ---@class Diff
 ---@field kind string
@@ -233,9 +233,10 @@ end
 ---map cursor positions in a pager-decorated hunk back to the underlying diff.
 ---@param pager_stripped string Pager line with ANSI escapes removed
 ---@param orig_line string Original diff line (with `+`/`-`/` ` prefix)
+---@param prefix_length integer Byte length of the diff status prefix
 ---@return boolean
-local function pager_line_matches(pager_stripped, orig_line)
-  local orig_content = orig_line:sub(2)
+local function pager_line_matches(pager_stripped, orig_line, prefix_length)
+  local orig_content = orig_line:sub(prefix_length + 1)
 
   -- Content after the last `│` separator (delta with line-numbers)
   local after_bar = pager_stripped:match(".*│([^│]*)$")
@@ -266,24 +267,28 @@ end
 ---that the pager added as decoration (filename headers, section dividers,
 ---expanded context, etc.) are mapped to `false` so callers can treat them as
 ---non-jumpable.
+---
+---The matcher assumes the pager preserves each diff content line as a
+---substring of its rendered output (this holds for delta in its default and
+---line-numbers modes). Pagers that reformat content per word/character may
+---yield an all-`false` mapping; cursor jumps inside such a hunk are disabled.
 ---@param content string[] Pager output for this hunk
 ---@param hunk_lines string[] Original diff lines for the hunk (no header)
+---@param prefix_length? integer Byte length of the diff status prefix (1 for
+---  normal diffs, 2 for combined diffs). Defaults to 1.
 ---@return (integer|false)[]
-local function build_pager_line_mapping(content, hunk_lines)
+local function build_pager_line_mapping(content, hunk_lines, prefix_length)
+  prefix_length = prefix_length or 1
   local mapping = {}
   local orig_idx = 1
 
   for pager_idx, line in ipairs(content) do
     local stripped = util.remove_ansi_escape_codes(line)
-    local matched = false
 
-    if orig_idx <= #hunk_lines and pager_line_matches(stripped, hunk_lines[orig_idx]) then
+    if orig_idx <= #hunk_lines and pager_line_matches(stripped, hunk_lines[orig_idx], prefix_length) then
       mapping[pager_idx] = orig_idx
       orig_idx = orig_idx + 1
-      matched = true
-    end
-
-    if not matched then
+    else
       mapping[pager_idx] = false
     end
   end
@@ -309,6 +314,9 @@ local function build_pager_contents(diff_header, lines, hunks)
   local jobs = {}
   vim.iter(hunks):each(function(hunk)
     local header = lines[hunk.diff_from]
+    local at_signs = header:match("^(@+)")
+    -- For normal diffs `@@` → 1-byte prefix; for combined diffs `@@@` → 2.
+    local prefix_length = at_signs and (#at_signs - 1) or 1
     local content = vim.list_slice(lines, hunk.diff_from + 1, hunk.diff_to)
 
     local job = vim.system(config.values.log_pager, { stdin = true })
@@ -318,13 +326,19 @@ local function build_pager_contents(diff_header, lines, hunks)
       end
     end
     job:write()
-    insert(jobs, { job = job, hunk_lines = content })
+    insert(jobs, { job = job, hunk_lines = content, prefix_length = prefix_length })
   end)
 
   vim.iter(jobs):each(function(item)
     local content = vim.split(item.job:wait().stdout, "\n")
+    -- Pagers typically end their output with a trailing newline; drop the
+    -- resulting empty element so it does not become a phantom row in the
+    -- buffer and skew `pager_length`.
+    if content[#content] == "" then
+      table.remove(content)
+    end
     insert(res, content)
-    insert(mappings, build_pager_line_mapping(content, item.hunk_lines))
+    insert(mappings, build_pager_line_mapping(content, item.hunk_lines, item.prefix_length))
   end)
 
   return res, mappings
@@ -344,11 +358,11 @@ local function parse_diff(raw_diff, raw_stats)
 
   for i, hunk in ipairs(hunks) do
     hunk.file = file
-    hunk.pager_line_mapping = pager_line_mappings[i]
-    if pager_contents[i] and pager_line_mappings[i] then
+    if pager_line_mappings[i] then
       -- `hunk.length` is the offset of the last content line from the hunk
       -- header (= number of content rows). Mirror that for the rendered
       -- output so consumers can derive `hunk.last` the same way.
+      hunk.pager_line_mapping = pager_line_mappings[i]
       hunk.pager_length = #pager_contents[i]
     end
   end

@@ -81,4 +81,33 @@ describe("lib.git.diff.build_pager_line_mapping", function()
 
     eq({ 1, 2, 3 }, diff.build_pager_line_mapping(content, hunk_lines))
   end)
+
+  it("handles combined diffs by honoring a 2-byte status prefix", function()
+    -- Combined diffs (e.g. 3-way merge) use `@@@` headers and a 2-byte status
+    -- prefix on each content line.
+    local hunk_lines = {
+      "  context",
+      "+ added on first parent",
+      " -removed on second parent",
+    }
+    local content = hunk_lines
+
+    eq({ 1, 2, 3 }, diff.build_pager_line_mapping(content, hunk_lines, 2))
+  end)
+
+  it("returns all `false` when the pager output does not match", function()
+    -- A pager that reformats lines beyond recognition (word-diff, inline diff,
+    -- etc.) leaves the content un-matchable. In that case every entry is
+    -- `false` so callers safely no-op instead of jumping to the wrong line.
+    local hunk_lines = {
+      " context",
+      "+added",
+    }
+    local content = {
+      "<<< rendered as a single block >>>",
+      "(no recognizable line structure)",
+    }
+
+    eq({ false, false }, diff.build_pager_line_mapping(content, hunk_lines))
+  end)
 end)
