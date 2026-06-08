@@ -346,10 +346,10 @@ local function parse_diff(raw_diff, raw_stats)
     hunk.file = file
     hunk.pager_line_mapping = pager_line_mappings[i]
     if pager_contents[i] and pager_line_mappings[i] then
-      -- `hunk.length` counts the hunk header (1) plus its raw diff lines.
-      -- When a pager rewrites the content, mirror that with the rendered
-      -- row count (header + rendered content rows).
-      hunk.pager_length = 1 + #pager_contents[i]
+      -- `hunk.length` is the offset of the last content line from the hunk
+      -- header (= number of content rows). Mirror that for the rendered
+      -- output so consumers can derive `hunk.last` the same way.
+      hunk.pager_length = #pager_contents[i]
     end
   end
 
