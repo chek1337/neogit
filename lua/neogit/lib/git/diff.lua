@@ -11,6 +11,7 @@ local sha256 = vim.fn.sha256
 ---@field parse fun(raw_diff: string[], raw_stats: string[]): Diff
 ---@field build fun(section: string, file: StatusItem)
 ---@field staged_stats fun(): DiffStagedStats
+---@field build_pager_line_mapping fun(content: string[], hunk_lines: string[]): (integer|false)[]
 ---
 ---@class Diff
 ---@field kind string
@@ -38,6 +39,10 @@ local sha256 = vim.fn.sha256
 ---@field first number First line number in buffer
 ---@field last number Last line number in buffer
 ---@field lines string[]
+---@field pager_line_mapping? (integer|false)[] When a `log_pager` is active,
+---  maps each pager-rendered line index to its index in `lines`. `false`
+---  entries denote decoration lines (filename header, dividers, expanded
+---  context) which should not be jumpable.
 ---
 ---@class DiffStagedStats
 ---@field summary string
@@ -221,20 +226,87 @@ local function build_hunks(lines)
   return hunks
 end
 
+---Match a pager-rendered line against the next expected diff line. Used to
+---map cursor positions in a pager-decorated hunk back to the underlying diff.
+---@param pager_stripped string Pager line with ANSI escapes removed
+---@param orig_line string Original diff line (with `+`/`-`/` ` prefix)
+---@return boolean
+local function pager_line_matches(pager_stripped, orig_line)
+  local orig_content = orig_line:sub(2)
+
+  -- Content after the last `│` separator (delta with line-numbers)
+  local after_bar = pager_stripped:match(".*│([^│]*)$")
+  -- Trailing run that could carry the diff content (delta without line-numbers,
+  -- or other pagers).
+  local trailing = pager_stripped
+
+  if orig_content == "" then
+    if after_bar ~= nil then
+      return after_bar:match("^%s*$") ~= nil
+    end
+    return trailing:match("^%s*$") ~= nil
+  end
+
+  if after_bar ~= nil then
+    return after_bar == orig_content
+  end
+
+  if #trailing >= #orig_content and trailing:sub(-#orig_content) == orig_content then
+    return true
+  end
+
+  return false
+end
+
+---Build a mapping `pager_index -> hunk.lines index` so cursor positions inside
+---the pager-rendered hunk can be resolved to the underlying diff lines. Lines
+---that the pager added as decoration (filename headers, section dividers,
+---expanded context, etc.) are mapped to `false` so callers can treat them as
+---non-jumpable.
+---@param content string[] Pager output for this hunk
+---@param hunk_lines string[] Original diff lines for the hunk (no header)
+---@return (integer|false)[]
+local function build_pager_line_mapping(content, hunk_lines)
+  local mapping = {}
+  local orig_idx = 1
+
+  for pager_idx, line in ipairs(content) do
+    local stripped = util.remove_ansi_escape_codes(line)
+    local matched = false
+
+    if orig_idx <= #hunk_lines and pager_line_matches(stripped, hunk_lines[orig_idx]) then
+      mapping[pager_idx] = orig_idx
+      orig_idx = orig_idx + 1
+      matched = true
+    end
+
+    if not matched then
+      mapping[pager_idx] = false
+    end
+  end
+
+  return mapping
+end
+
 ---@param diff_header string[]
 ---@param lines string[]
 ---@param hunks Hunk[]
----@return string[][]
+---@return string[][], (integer|false)[][]
 local function build_pager_contents(diff_header, lines, hunks)
   local res = {}
+  local mappings = {}
+
+  if config.values.log_pager == nil then
+    vim.iter(hunks):each(function(hunk)
+      insert(res, vim.list_slice(lines, hunk.diff_from + 1, hunk.diff_to))
+    end)
+    return res, mappings
+  end
+
   local jobs = {}
   vim.iter(hunks):each(function(hunk)
     local header = lines[hunk.diff_from]
     local content = vim.list_slice(lines, hunk.diff_from + 1, hunk.diff_to)
-    if config.values.log_pager == nil then
-      insert(res, content)
-      return
-    end
 
     local job = vim.system(config.values.log_pager, { stdin = true })
     for _, part in ipairs { diff_header, { header }, content } do
@@ -243,17 +315,16 @@ local function build_pager_contents(diff_header, lines, hunks)
       end
     end
     job:write()
-    insert(jobs, job)
+    insert(jobs, { job = job, hunk_lines = content })
   end)
 
-  if config.values.log_pager ~= nil then
-    vim.iter(jobs):each(function(job)
-      local content = vim.split(job:wait().stdout, "\n")
-      insert(res, content)
-    end)
-  end
+  vim.iter(jobs):each(function(item)
+    local content = vim.split(item.job:wait().stdout, "\n")
+    insert(res, content)
+    insert(mappings, build_pager_line_mapping(content, item.hunk_lines))
+  end)
 
-  return res
+  return res, mappings
 end
 
 ---@param raw_diff string[]
@@ -263,15 +334,15 @@ local function parse_diff(raw_diff, raw_stats)
   local header, start_idx = build_diff_header(raw_diff)
   local lines = build_lines(raw_diff, start_idx)
   local hunks = build_hunks(lines)
-  local pager_contents = build_pager_contents(header, lines, hunks)
+  local pager_contents, pager_line_mappings = build_pager_contents(header, lines, hunks)
   local kind, info = build_kind(header)
   local file = build_file(header, kind)
   local stats = parse_diff_stats(raw_stats or {})
 
-  util.map(hunks, function(hunk)
+  for i, hunk in ipairs(hunks) do
     hunk.file = file
-    return hunk
-  end)
+    hunk.pager_line_mapping = pager_line_mappings[i]
+  end
 
   return { ---@type Diff
     kind = kind,
@@ -423,4 +494,5 @@ return { ---@type NeogitGitDiff
   parse = parse_diff,
   staged_stats = staged_stats,
   build = build,
+  build_pager_line_mapping = build_pager_line_mapping,
 }

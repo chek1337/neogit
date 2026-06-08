@@ -62,6 +62,14 @@ local function translate_cursor_location(self, item)
     for _, hunk in ipairs(item.diff.hunks) do
       if line >= hunk.first and line <= hunk.last then
         local offset = line - hunk.first
+        -- See diff.build_pager_line_mapping: when a `log_pager` decorates the
+        -- hunk, translate the rendered index back to a diff-line index.
+        if hunk.pager_line_mapping then
+          offset = hunk.pager_line_mapping[offset] or false
+          if not offset then
+            return
+          end
+        end
         local row = jump.adjust_row(hunk.disk_from, offset, hunk.lines, "-")
         return { row, 0 }
       end

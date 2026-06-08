@@ -194,6 +194,16 @@ local function diff_visit_file(self, component, worktree)
 
   local line = self.buffer:cursor_line()
   local offset = line - hunk_component.position.row_start
+  -- When a `log_pager` (e.g. delta) decorates the hunk, the line under the
+  -- cursor does not correspond 1:1 to `hunk.lines`. Resolve the pager-rendered
+  -- index back to a diff-line index before translating the location.
+  if hunk.pager_line_mapping then
+    offset = hunk.pager_line_mapping[offset] or false
+  end
+  if not offset then
+    -- Cursor on a decoration line introduced by the pager
+    return
+  end
   local location = jump.translate_hunk_location(hunk, offset)
   if not location then
     -- Cursor outside the hunk, shouldn't happen. Don't warn in that case
